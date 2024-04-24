@@ -2,19 +2,69 @@ import { useState, useRef } from "react";
 import Head from "next/head";
 import Image from "next/image";
 import Files from "@/components/Files";
+import * as LitJsSdk from "@lit-protocol/lit-node-client"
+import { AccessControlConditions } from '@lit-protocol/types';
 
 export default function Home() {
   const [file, setFile] = useState("");
   const [cid, setCid] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [decryptionCid, setDecryptionCid] = useState(""); 
 
   const inputFile = useRef(null);
+  
 
   const uploadFile = async (fileToUpload) => {
     try {
       setUploading(true);
+      const litNodeClient = new LitJsSdk.LitNodeClient({
+        litNetwork: 'cayenne'
+      })
+
+      await litNodeClient.connect()
+      const authSig = await LitJsSdk.checkAndSignAuthMessage({
+        chain: "ethereum",
+        nonce: "7",
+      })
+      const accs: AccessControlConditions = [
+        {
+          contractAddress: '',
+          standardContractType: '',
+          chain: 'ethereum',
+          method: 'eth_getBalance',
+          parameters: [':userAddress', 'latest'],
+          returnValueTest: {
+            comparator: '>=',
+            value: '0',
+          },
+        },
+        ];
+      // const accs = [
+      //   {
+      //     contractAddress: '',
+      //     standardContractType: '',
+      //     chain: 'ethereum',
+      //     method: 'eth_getBalance',
+      //     parmeters:[':userAddress', 'latest'],
+      //     returnValueTest: {
+      //       comperator: '>=',
+      //       value: '0'
+      //     }
+      //   }
+      // ];
+      
+      const encryptedZip = await LitJsSdk.encryptFileAndZipWithMetadata({
+        accessControlConditions: accs,
+        authSig,
+        chain: 'ethereum',
+        file: fileToUpload,
+        litNodeClient: litNodeClient,
+        readme: "Use IPFS CID of this file to decrypt it"
+      });
+      const encryptedBlob = new Blob([encryptedZip], { type: 'text/plain' })
+      const encryptedFile = new File([encryptedBlob], fileToUpload.name)
       const formData = new FormData();
-      formData.append("file", fileToUpload, fileToUpload.name);
+      formData.append("file", encryptedFile, fileToUpload.name);
       const res = await fetch("/api/files", {
         method: "POST",
         body: formData,
@@ -28,6 +78,37 @@ export default function Home() {
       alert("Trouble uploading file");
     }
   };
+
+  const decryptFile = async (fileToDecrypt) => {
+    try {
+      const fileRes = await fetch(`${process.env.NEXT_PUBLIC_GATEWAY_URL}/ipfs/${fileToDecrypt}?filename=encrypted.zip`)
+      const file = await fileRes.blob()
+      const litNodeClient = new LitJsSdk.LitNodeClient({
+        litNetwork: 'cayenne',
+      });
+      await litNodeClient.connect();
+      const authSig = await LitJsSdk.checkAndSignAuthMessage({
+        chain: 'ethereum',
+        nonce: "your_nonce_value_here",
+
+      });
+      const { decryptedFile, metadata } = await LitJsSdk.decryptZipFileWithMetadata({
+        file: file,
+        litNodeClient: litNodeClient,
+        authSig: authSig,
+      })
+      const blob = new Blob([decryptedFile], { type: 'application/octet-stream' });
+      const downloadLink = document.createElement('a');
+      downloadLink.href = URL.createObjectURL(blob);
+      downloadLink.download = metadata.name;  
+      downloadLink.click();
+
+    } catch (error) {
+      alert("Trouble decrypting file")
+      console.log(error)
+    }
+
+  }
 
   const handleChange = (e) => {
     setFile(e.target.files[0]);
@@ -48,27 +129,27 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Pinata Next.js App</title>
+        <title>File Storage app</title>
         <meta name="description" content="Generated with create-pinata-app" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/pinnie.png" />
+        <link rel="icon" href="/pinnii.png" />
       </Head>
       <main className="w-full min-h-screen m-auto flex flex-col justify-center items-center">
         <div className="w-full h-full m-auto bg-heroImage bg-cover bg-center flex flex-col justify-center items-center">
           <div className="h-full max-w-screen-xl">
-            <div className="w-full m-auto mt-16 flex justify-start items-center">
-              <Image src="/logo.png" alt="Pinata logo" height={30} width={115} />
+            <div className="w-full m-auto mt-5 flex justify-start items-center">
+              <Image src="/gogo.png" alt="logo" height={200} width={115} />
             </div>
-            <div className="h-full w-full m-auto flex justify-center items-center gap-8">
+            <div className="h-full w-full  m-auto flex justify-center items-center gap-8">
               <div className="w-1/2 flex flex-col gap-6">
-                <h1>Pinata + Next.js</h1>
-                <p>
+                <h1>Open Storage</h1>
+                {/* <p>
                   Update the <span className="py-1 px-2 rounded-md italic border-2 border-accent">.env.local</span> file to set your
                   Pinata API key and (optionally) your IPFS gateway URL, restart the
                   app, then click the Upload button and you'll see uploads to IPFS
                   just work™️. If you've already uploaded files, click Load recent to
                   see the most recently uploaded file.
-                </p>
+                </p> */}
                 <input
                   type="file"
                   id="file"
@@ -77,16 +158,27 @@ export default function Home() {
                   style={{ display: "none" }}
                 />
                 <div>
-                  <button onClick={loadRecent} className="mr-10 w-[150px] bg-light text-secondary border-2 border-secondary rounded-3xl py-2 px-4 hover:bg-secondary hover:text-light transition-all duration-300 ease-in-out">
+                  <button onClick={loadRecent} className="mr-10 w-[200px] bg-light text-secondary border-2 border-secondary rounded-3xl py-2 px-4 hover:bg-secondary hover:text-light transition-all duration-300 ease-in-out">
                     Load recent
                   </button>
                   <button
                     disabled={uploading}
                     onClick={() => inputFile.current.click()}
-                    className="w-[150px] bg-secondary text-light rounded-3xl py-2 px-4 hover:bg-accent hover:text-light transition-all duration-300 ease-in-out"
+                    className="w-[200px] bg-secondary text-light rounded-3xl py-2 px-4 hover:bg-accent hover:text-light transition-all duration-300 ease-in-out"
                   >
                     {uploading ? "Uploading..." : "Upload"}
                   </button>
+                  <input
+                    type="text"
+                    onChange={(e) => setDecryptionCid(e.target.value)}
+                    className="px-4 py-2 border-2 border-secondary rounded-3xl text-lg"
+                    placeholder="Enter CID to decrypt"
+                  />
+                  
+                  <button
+                  onClick={() => decryptFile(decryptionCid)}
+                  className="mr-10  w-[200px] bg-light text-secondary border-2 border-secondary rounded-3xl py-2 px-4 hover:bg-secondary hover:text-light transition-all duration-300 ease-in-out"
+                >Decrypt</button>
                 </div>
                 {cid && (
                   <Files cid={cid} />
@@ -95,53 +187,6 @@ export default function Home() {
               <div className="w-1/2 flex justify-center items-center h-full">
                 <Image height={600} width={600} src="/hero.png" alt="hero image of computer and code" />
               </div>
-            </div>
-          </div>
-          <div className="h-full w-full bg-secondary">
-            <div className="max-w-screen-xl min-h-full my-8 mx-auto flex justify-center items-center gap-8">
-              <div className="text-center bg-light rounded-lg w-full flex flex-col justify-center items-center p-2 gap-4 h-[475px]">
-                <Image
-                  src="/ufo.png"
-                  alt="Pinnie floating with balloons"
-                  height="200"
-                  width="200"
-                />
-                <h2 className="font-telegraf font-bold text-3xl">Read the docs</h2>
-                <p className="w-2/3">
-                  SDKs, API reference, and recipes all designed to help you get
-                  started faster.
-                </p>
-                <a
-                  className="bg-secondary text-light rounded-3xl pt-3 pb-2 px-4 hover:bg-accent hover:text-light transition-all duration-300 ease-in-out font-telegraf font-bold"
-                  href="https://docs.pinata.cloud"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  Explore the docs
-                </a>
-              </div>
-              <div className="text-center bg-light rounded-lg w-full flex flex-col justify-center items-center p-2 gap-4 h-[475px]">
-                <Image
-                  src="/rocket.png"
-                  alt="Pinnie with scuba gear on"
-                  height="200"
-                  width="200"
-                />
-                <h2 className="font-telegraf font-bold text-3xl">Pinata dashboard</h2>
-                <p className="w-2/3">
-                  Log into your Pinata dashboard to see all your files, configure an
-                  IPFS gateway, and more.
-                </p>
-                <a
-                  className="bg-secondary text-light rounded-3xl pt-3 pb-2 px-4 hover:bg-accent hover:text-light transition-all duration-300 ease-in-out font-telegraf font-bold"
-                  href="https://app.pinata.cloud"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  Go to the dashboard
-                </a>
-              </div>
-
             </div>
           </div>
           <div className="bg-accent w-full h-full">
